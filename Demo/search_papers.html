@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Arxiv Paper Search</title>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <style>
+        body {
+            font-family: "Segoe UI", Arial;
+            background: #f5f7fb;
+            margin: 40px;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        .search-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+            margin-bottom: 20px;
+        }
+
+        label {
+            margin-right: 10px;
+            font-weight: 600;
+        }
+
+        select,
+        input {
+            padding: 8px;
+            margin-right: 15px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+        }
+
+        button {
+            padding: 8px 18px;
+            border: none;
+            background: #4a7cff;
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #345fd1;
+        }
+
+        .result-count {
+            margin-top: 10px;
+            font-weight: 600;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            table-layout: fixed; /* 固定表格布局，确保列宽生效 */
+        }
+
+        th,
+        td {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }
+
+        /* 核心修改1：除摘要列外，所有表头+数据单元格居中 */
+        th,
+        td:not(:nth-child(5)) { /* 排除第5列（Abstract） */
+            text-align: center;
+        }
+        /* 摘要列单独左对齐 */
+        td:nth-child(5) {
+            text-align: left;
+        }
+
+        th {
+            background: #f0f3fa;
+        }
+
+        tr:hover {
+            background: #f9fbff;
+        }
+
+        /* 精准控制各列宽度 */
+        th:nth-child(1), td:nth-child(1) { /* Title列 */
+            width: 30%;
+            white-space: normal; /* 标题允许换行 */
+        }
+        th:nth-child(2), td:nth-child(2) { /* Authors列 */
+            width: 18%;
+            white-space: normal; /* 作者名允许换行 */
+        }
+        th:nth-child(3), td:nth-child(3) { /* Conference列 */
+            width: 8%;
+        }
+        th:nth-child(4), td:nth-child(4) { /* Submitted列 */
+            width: 15%;
+            white-space: normal; /* 核心修改2：Submitted列强制换行，无省略号 */
+            overflow: visible;    /* 取消溢出隐藏 */
+            text-overflow: unset; /* 取消省略号 */
+        }
+        th:nth-child(5), td:nth-child(5) { /* Abstract列 */
+            width: 24%;
+            white-space: normal; /* 摘要允许换行 */
+            overflow: hidden;    /* 摘要仍保留溢出隐藏 */
+            text-overflow: ellipsis;
+        }
+        th:nth-child(6), td:nth-child(6) { /* Links列 */
+            width: 5%;
+            white-space: normal; /* 链接列允许换行 */
+        }
+
+        .abstract {
+            max-width: 100%;
+        }
+
+        a {
+            color: #2a6df4;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .loading {
+            text-align: center;
+            font-size: 18px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>ArXiv Paper Search</h1>
+    <div class="loading" id="loading">Loading papers...</div>
+    <div class="search-panel">
+        <label>Search Column</label>
+        <select id="column">
+            <option value="title">Title</option>
+            <option value="abstract">Abstract</option>
+            <option value="authors">Authors</option>
+        </select>
+        <label>Keywords</label>
+        <input type="text" id="keywords" placeholder="ReID, VIReID">
+        <label>Conference</label>
+        <select id="conference">
+            <option value="all">All</option>
+            <option value="CVPR">CVPR</option>
+            <option value="ICCV">ICCV</option>
+            <option value="ECCV">ECCV</option>
+            <option value="ICLR">ICLR</option>
+            <option value="NeurIPS">NeurIPS</option>
+            <option value="ICML">ICML</option>
+            <option value="AAAI">AAAI</option>
+            <option value="IJCAI">IJCAI</option>
+            <option value="WACV">WACV</option>
+            <option value="BMVC">BMVC</option>
+            <option value="ACCV">ACCV</option>
+            <option value="ACM">ACM</option>
+        </select>
+        <button onclick="search()">Search</button>
+        <div class="result-count" id="count"></div>
+    </div>
+    <table id="table">
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>Authors</th>
+                <th>Conference</th>
+                <th>Submitted</th>
+                <th>Abstract</th>
+                <th>Links</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+    <script>
+        let papers = [];
+        const conferences = [
+            "CVPR", "ICCV", "ECCV", "ICLR", "NeurIPS",
+            "ICML", "AAAI", "IJCAI", "WACV", "BMVC", "ACCV"
+        ];
+        let loadedCount = 0;
+
+        function loadAllCSVs() {
+            conferences.forEach(conf => {
+                let file = `arxiv_${conf}_papers_after_2022.csv`;
+                Papa.parse(file, {
+                    download: true,
+                    header: true,
+                    complete: function (res) {
+                        let data = res.data;
+                        data.forEach(p => {
+                            p.conference = conf
+                        });
+                        papers = papers.concat(data);
+                        loadedCount++;
+                        console.log("Loaded", conf, data.length);
+                        if (loadedCount === conferences.length) {
+                            document.getElementById("loading").innerText =
+                                "Loaded " + papers.length + " papers";
+                        }
+                    }
+                });
+            });
+        }
+
+        window.onload = loadAllCSVs;
+
+        function search() {
+            let column = document.getElementById("column").value;
+            let keywords = document.getElementById("keywords").value
+                .toLowerCase()
+                .split(/[, ]+/)
+                .filter(k => k.length > 0);
+            let conference = document.getElementById("conference").value;
+            let tbody = document.querySelector("#table tbody");
+            tbody.innerHTML = "";
+            let count = 0;
+
+            papers.forEach(p => {
+                if (!p[column]) return;
+                let text = p[column].toLowerCase();
+                let keyword_match = true;
+                if (keywords.length > 0) {
+                    keyword_match = keywords.some(k => text.includes(k));
+                }
+                let conf_match = true;
+                if (conference !== "all") {
+                    conf_match = p.conference === conference;
+                }
+                if (keyword_match && conf_match) {
+                    count++;
+                    let abstract = p.abstract || "";
+                    let shortAbs = abstract.substring(0, 180);
+                    let row = document.createElement("tr");
+                    row.innerHTML = `
+                        <td>
+                            <a href="${p.web_link}" target="_blank">${p.title}</a>
+                        </td>
+                        <td>${p.authors}</td>
+                        <td>${p.conference}</td>
+                        <td>${p.submitted}</td>
+                        <td class="abstract">
+                            <span class="short">${shortAbs}...</span>
+                            <span class="full" style="display:none">${abstract}</span>
+                            <br>
+                            <a href="#" onclick="toggleAbstract(this);return false;">Show more</a>
+                        </td>
+                        <td>
+                            <a href="${p.web_link}" target="_blank">Arxiv</a><br>
+                            <a href="${p.pdf_link}" target="_blank">PDF</a>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                }
+            });
+            document.getElementById("count").innerText = "Found " + count + " papers";
+        }
+
+        function toggleAbstract(link) {
+            let td = link.parentElement;
+            let shortText = td.querySelector(".short");
+            let fullText = td.querySelector(".full");
+            if (fullText.style.display === "none") {
+                fullText.style.display = "inline";
+                shortText.style.display = "none";
+                link.innerText = "Show less";
+            } else {
+                fullText.style.display = "none";
+                shortText.style.display = "inline";
+                link.innerText = "Show more";
+            }
+        }
+    </script>
+</body>
+
+</html>
